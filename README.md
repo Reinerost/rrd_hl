@@ -18,7 +18,7 @@ updating, fetching and exporting RRD data, including:
 - VDEF
 - SHIFT
 - XPORT
-- XML, JSON and CSV export
+- XML and JSON export
 
 The graph data processing required by XPORT is retained without the
 graphics rendering layer.
@@ -35,6 +35,12 @@ To reduce size and external dependencies, `rrd_hl` does not build:
 
 The headless implementation also removes the runtime dependencies on
 GLib, PCRE and libxml2.
+
+## OpenWrt
+
+An OpenWrt package Makefile is provided in `openwrt/Makefile`.
+
+The package builds `librrd_hl` and the `rrd_hl` command line utility.
 
 ## Origin
 
