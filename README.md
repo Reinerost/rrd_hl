@@ -1,84 +1,48 @@
-RRDtool - Round Robin Database Tool
-===================================
+# rrd_hl
 
-[![Join the chat at https://gitter.im/oetiker/rrdtool-1.x](https://badges.gitter.im/oetiker/rrdtool-1.x.svg)](https://gitter.im/oetiker/rrdtool-1.x?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+`rrd_hl` is a lightweight, headless version of RRDtool for embedded
+systems. It is based on RRDtool 1.11.0 and removes graphics and other
+dependencies that are not required for headless data processing.
 
-RRDtool 1.x master build status: [![Linux Build](https://github.com/oetiker/rrdtool-1.x/actions/workflows/build-test-linux.yml/badge.svg)](https://github.com/oetiker/rrdtool-1.x/actions/workflows/build-test-linux.yml)
-test coverage [![codecov](https://codecov.io/github/oetiker/rrdtool-1.x/branch/master/graph/badge.svg?token=ossALZyI2G)](https://codecov.io/github/oetiker/rrdtool-1.x)
+The primary target is OpenWrt and other resource-constrained Linux
+systems.
 
-RRDtool is a little program for easily maintaining a database of time-series
-data. It comes with a charting program for drawing pretty graphs based on
-the data stored.
+## Features
 
-It is pretty easy to gather status information from all sorts of things,
-ranging from the temperature in your office to the number of octets which
-have passed through the FDDI interface of your router. But it is not so
-trivial to store this data in a efficient and systematic manner. This is
-where RRDtool kicks in. It lets you log and analyze the data you gather from
-all kinds of data-sources (DS). The data analysis part of RRDtool is based
-on the ability to quickly generate graphical representations of the data
-values collected over a definable time period.
+`rrd_hl` retains the RRDtool core functionality required for creating,
+updating, fetching and exporting RRD data, including:
 
+- RRD create, update, fetch and dump
+- DEF
+- CDEF / RPN expressions
+- VDEF
+- SHIFT
+- XPORT
+- XML, JSON and CSV export
 
-To compile:
------------
+The graph data processing required by XPORT is retained without the
+graphics rendering layer.
 
-check out the instructions in [doc/rrdbuild.pod](doc/rrdbuild.pod)
+## Removed components
 
-Getting Started:
-----------------
+To reduce size and external dependencies, `rrd_hl` does not build:
 
-Either after compiling or after installing you can try the example
-RRDtool applications in the examples directory.
+- graph rendering
+- Cairo / Pango based graphics
+- rrdcached
+- restore support
+- language bindings
 
-To learn:
----------
+The headless implementation also removes the runtime dependencies on
+GLib, PCRE and libxml2.
 
-Read the documentation in the doc directory.
+## Origin
 
-If you are looking for a more slow paced introduction, make sure to read
-Alex van den Bogaerdt's rrdtutorial which is also available from the doc
-directory. Also read his cdeftutorial and Steve Rader's rpntutorial.
- 
-If you want to know about the format of the log files check
-[src/rrd_format.h](src/rrd_format.h) there are a lot of comments in there ...
+`rrd_hl` is based on RRDtool 1.11.0.
 
-How to make Tobi happy:
------------------------
+RRDtool is developed by Tobi Oetiker and contributors.
+The original copyright and license information is retained in this
+repository.
 
-If you want to show your appreciation for RRDtool you could make me happy
-by going to https://tobi.oetiker.ch/wish and ordering a CD from
-my CD wish list ... 
-
-How to keep in touch:
----------------------
-
-There are 3 Mailing lists for RRDtool:
-
-rrd-announce	LOW volume RRDtool Announcements List (Only Stable Releases)
-rrd-users       For discussion amongst people who use RRDtool in their applications
-rrd-developers  For people who actually HACK RRDtool code
-
-To subscribe to <MAILGLIST> send a message with the subject 'subscribe'
-to <MAILGLIST>-request@lists.oetiker.ch
-
-Note, that postings to rrd-announce will always be cross-posted 
-to rrd-users and rrd-developers as well.
-
-To Contribute:
---------------
-
-Contributed feature and bug patches are most welcome. Since rrdtool lives on
-github, it is now very easy to create pull requests. Work from the master
-branch unless you are creating bugfixes. No new features should go into the
-1.2, 1.3 and 1.4 branches.
-
-If you contribute new features, make sure to also update the documentation
-pod files.
-
-The latest released Version:
--------------------
-Is always available from https://oss.oetiker.ch/rrdtool/
-
-
-Tobias Oetiker <tobi@oetiker.ch>
+For the original RRDtool project, see:
+https://github.com/oetiker/rrdtool-1.x
