@@ -1,0 +1,28 @@
+#!/bin/sh
+# shellcheck disable=SC2086,SC2046,SC2029
+#
+# Maintainer-local release helper. Bumps the version (via the same
+# conftools/bump-version.sh that CI uses), builds the dist tarball,
+# does a quick sanity build out of the tarball, then SCPs the result
+# to oss.oetiker.ch. Useful for ad-hoc local releases; the canonical
+# release path is .github/workflows/release.yml.
+
+set -e
+VERSION=$(cat VERSION)
+
+set -x
+sh conftools/bump-version.sh "$VERSION"
+./bootstrap
+./configure --enable-maintainer-mode
+make dist
+tar zxvf rrdtool-${VERSION}.tar.gz
+cd rrdtool-$VERSION
+./configure
+make
+src/rrdtool
+cd ..
+echo READY TO DIST ... press ENTER
+read -r
+scp CHANGES rrdtool-$VERSION.tar.gz  oposs@james:public_html/rrdtool/pub
+ssh oposs@james "cd public_html/rrdtool/pub/;rm rrdtool.tar.gz;ln -s rrdtool-$VERSION.tar.gz rrdtool.tar.gz"
+cd ..
