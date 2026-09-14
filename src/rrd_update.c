@@ -26,7 +26,7 @@
 
 #include "rrd_client.h"
 #include "rrd_update.h"
-#include <glib.h>
+
 
 #include "rrd_strtod.h"
 
@@ -403,62 +403,53 @@ err_free:
 
 
 /* the file-template-cache implementation */
-static GTree *rrd_file_template_cache = NULL;
-/* the necessary functions for the gtree */
-static gint cache_compare_names (gconstpointer name1,
-				gconstpointer name2,
-				gpointer data)
+struct rrd_file_template_cache_entry {
+    char *filename;
+    char *format;
+    struct rrd_file_template_cache_entry *next;
+};
+
+static struct rrd_file_template_cache_entry *rrd_file_template_cache = NULL;
+
+static const char *
+rrd_get_file_template_format(const char *filename)
 {
-	(void)(data); /* to avoid unused message */
-	return (strcmp((const char *)name1, (const char *)name2));
+    struct rrd_file_template_cache_entry *entry;
+    char *format;
+    char *filename_copy;
+
+    for (entry = rrd_file_template_cache;
+         entry != NULL;
+         entry = entry->next) {
+        if (strcmp(entry->filename, filename) == 0)
+            return entry->format;
+    }
+
+    format = rrd_get_file_template(filename);
+    if (format == NULL)
+        return NULL;
+
+    filename_copy = strdup(filename);
+    if (filename_copy == NULL) {
+        free(format);
+        return NULL;
+    }
+
+    entry = malloc(sizeof(*entry));
+    if (entry == NULL) {
+        free(filename_copy);
+        free(format);
+        return NULL;
+    }
+
+    entry->filename = filename_copy;
+    entry->format = format;
+    entry->next = rrd_file_template_cache;
+
+    rrd_file_template_cache = entry;
+
+    return entry->format;
 }
-
-static void cache_destroy(gpointer data)
-{
-	free(data);
-}
-
-static const char *rrd_get_file_template_format(const char *filename) /* {{{ */
-{
-	char *format = NULL;
-	/* create rrd_file_template_cache  if needed */
-	if (!rrd_file_template_cache) {
-		rrd_file_template_cache = g_tree_new_full (
-			cache_compare_names,
-			NULL,
-			cache_destroy,
-			cache_destroy);
-		if (!rrd_file_template_cache)
-			return NULL;
-	}
-
-	/* fetch from cache */
-	format = (char *) g_tree_lookup(rrd_file_template_cache,
-					filename);
-	if (format)
-		return format;
-
-	/* fetch information from file */
-	format = rrd_get_file_template(filename);
-	if (!format)
-	        return NULL;
-
-	/* create copy of filename */
-	filename = strdup(filename);
-	if (!filename)
-		goto free_format;
-
-	/* and add object to tree */
-	g_tree_insert (rrd_file_template_cache,
-		       (char *)filename,
-		format);
-
-	return format;
-
-free_format:
-	free((void *)format);
-	return NULL;
-} /* }}} const char *rrd_get_file_template_format */
 
 static size_t _count_fields(const char *field)
 {

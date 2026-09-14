@@ -475,13 +475,9 @@ static long find_var(
     char *key)
 {
     /* this makes only sense for a sufficient number of items */
-    long      match = -1;
-    gpointer  value;
-    gboolean  ok =
-        g_hash_table_lookup_extended(im->gdef_map, key, NULL, &value);
-    if (ok) {
-        match = GPOINTER_TO_INT(value);
-    }
+    long match = -1;
+
+    rrd_hl_map_get(im->gdef_map, key, &match);
 
     /* printf("%s -> %ld\n",key,match); */
 
@@ -1103,16 +1099,14 @@ static graph_desc_t *newGraphDescription(
     char     *key = gdes_fetch_key((*gdp));
 
     if (gdp->gf == GF_DEF
-        && !g_hash_table_lookup_extended(im->rrd_map, key, NULL, NULL)) {
+        && !rrd_hl_map_get(im->rrd_map, key, NULL)) {
         dprintfhash("ins key %s - %ld\n", key, im->gdes_c - 1);
-        g_hash_table_insert(im->gdef_map, g_strdup(key),
-                            GINT_TO_POINTER(im->gdes_c - 1));
+        rrd_hl_map_put(im->gdef_map, strdup(key), im->gdes_c - 1);
     }
     free(key);
     if (gdp->gf == GF_DEF || gdp->gf == GF_VDEF || gdp->gf == GF_CDEF) {
         dprintfhash("ins vname %s - %ld\n", gdp->vname, im->gdes_c - 1);
-        g_hash_table_insert(im->gdef_map, g_strdup(gdp->vname),
-                            GINT_TO_POINTER(im->gdes_c - 1));
+        rrd_hl_map_put(im->gdef_map, strdup(gdp->vname), im->gdes_c - 1);
     }
     return gdp;
 }

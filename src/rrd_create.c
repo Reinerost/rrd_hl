@@ -9,8 +9,7 @@
 #include <time.h>
 #include <locale.h>
 #include <math.h>
-#include <glib.h>       // will use glist and regex
-
+#include <regex.h>
 
 
 #include <sys/types.h>  // stat()
@@ -44,13 +43,77 @@
 #include "rrd_rados.h"
 #endif
 
+#define DS_NAME_SUBGROUP            1
+#define MAPPED_DS_NAME_SUBGROUP     3
+#define OPT_MAPPED_INDEX_SUBGROUP   5
+#define DST_SUBGROUP                6
+#define DST_ARGS_SUBGROUP           7
+
+struct rrd_hl_list {
+    void *data;
+    struct rrd_hl_list *next;
+};
+
+static struct rrd_hl_list *rrd_hl_list_append(
+    struct rrd_hl_list *list,
+    void *data)
+{
+    struct rrd_hl_list *entry;
+    struct rrd_hl_list *tail;
+
+    entry = malloc(sizeof(*entry));
+    if (entry == NULL)
+        return NULL;
+
+    entry->data = data;
+    entry->next = NULL;
+
+    if (list == NULL)
+        return entry;
+
+    for (tail = list; tail->next != NULL; tail = tail->next)
+        ;
+
+    tail->next = entry;
+
+    return list;
+}
+
+static size_t rrd_hl_list_length(
+    const struct rrd_hl_list *list)
+{
+    size_t len = 0;
+
+    while (list != NULL) {
+        len++;
+        list = list->next;
+    }
+
+    return len;
+}
+
+static void rrd_hl_list_free_full(
+    struct rrd_hl_list *list,
+    void (*destroy)(void *))
+{
+    while (list != NULL) {
+        struct rrd_hl_list *next = list->next;
+
+        if (destroy != NULL)
+            destroy(list->data);
+
+        free(list);
+        list = next;
+    }
+}
+
 static void reset_pdp_prep(
     rrd_t *rrd);
 static int rrd_init_data(
     rrd_t *rrd);
 static int rrd_prefill_data(
     rrd_t *rrd,
-    const GList *sources_rrd_files,
+    const struct rrd_hl_list *sources_rrd_files,
     mapping_t *mappings,
     int mappings_cnt);
 static int positive_mod(
@@ -88,7 +151,7 @@ int rrd_create(
     int       rc = -1;
     char     *opt_daemon = NULL;
     int       opt_no_overwrite = 0;
-    GList    *sources = NULL;
+    struct rrd_hl_list *sources = NULL;
     const char **sources_array = NULL;
     char     *template = NULL;
 
@@ -167,12 +230,17 @@ int rrd_create(
                 rc = -1;
                 goto done;
             }
-            sources = g_list_append(sources, optcpy);
-            if (sources == NULL) {
+            struct rrd_hl_list *tmp;
+
+            tmp = rrd_hl_list_append(sources, optcpy);
+            if (tmp == NULL) {
+                free(optcpy);
                 rrd_set_error("Cannot allocate required data structure");
                 rc = -1;
                 goto done;
             }
+
+            sources = tmp;
 
             break;
         }
@@ -206,15 +274,16 @@ int rrd_create(
     }
 
     if (sources != NULL) {
-        sources_array = malloc((g_list_length(sources) + 1) * sizeof(char *));
+        sources_array = malloc((rrd_hl_list_length(sources) + 1) * sizeof(char *));
         if (sources_array == NULL) {
             rrd_set_error("cannot allocate memory");
             goto done;
         }
         int       n = 0;
-        GList    *p;
 
-        for (p = sources; p; p = g_list_next(p), n++) {
+        struct rrd_hl_list *p;
+
+        for (p = sources; p; p = p->next, n++) {
             sources_array[n] = p->data;
         }
         sources_array[n] = NULL;
@@ -242,7 +311,7 @@ int rrd_create(
     }
     if (sources != NULL) {
         // this will free the list elements as well
-        g_list_free_full(sources, (GDestroyNotify) free);
+        rrd_hl_list_free_full(sources, free);
         sources = NULL;
     }
     if (template != NULL) {
@@ -260,7 +329,7 @@ int rrd_create(
 #define strndup strndup_
 /* Implement the strndup function.
    Copyright (C) 2005 Free Software Foundation, Inc.
-   Written by Kaveh R. Ghazi <ghazi@caip.rutgers.edu>. 
+   Written by Kaveh R. Ghazi <ghazi@caip.rutgers.edu>.
 
 This function is part of the libiberty library.
 Libiberty is free software; you can redistribute it and/or
@@ -298,24 +367,28 @@ static char *strndup(
 
 #endif
 
+
+
 //                           1                  2                    3               4                5
 static const char *DS_RE =
-    "^(" DS_NAM_RE ")(?:=(" DS_NAM_RE ")(?:\\[([0-9]+)\\])?)?:(" DST_FMT_RE
-    "):(.+)$";
+    "^(" DS_NAM_RE ")(=(" DS_NAM_RE ")(\\[([0-9]+)\\])?)?:("
+    DST_FMT_RE "):(.+)$";
 /*
- * relevant RE subgroups:
- * 0 .. the entire input 
- * 1 .. the DS name
- * 2 .. the mapped DS name
- * 3 .. the optional integer mapped DS index
- * 4 .. the DS format (AVERAGE....)
- * 5 .. the DS format specific part
+ * POSIX ERE subgroups:
+ * 0 .. entire input
+ * 1 .. DS name
+ * 2 .. complete optional mapping (=name[index])
+ * 3 .. mapped DS name
+ * 4 .. complete optional index ([123])
+ * 5 .. mapped DS index (123)
+ * 6 .. DS type
+ * 7 .. DS type specific arguments
  */
 #define DS_NAME_SUBGROUP            1
-#define MAPPED_DS_NAME_SUBGROUP     2
-#define OPT_MAPPED_INDEX_SUBGROUP   3
-#define DST_SUBGROUP                4
-#define DST_ARGS_SUBGROUP           5
+#define MAPPED_DS_NAME_SUBGROUP     3
+#define OPT_MAPPED_INDEX_SUBGROUP   5
+#define DST_SUBGROUP                6
+#define DST_ARGS_SUBGROUP           7
 
 int parseDS(
     const char *def,
@@ -329,40 +402,53 @@ int parseDS(
     int       rc = -1;
     char     *dst_tmp = NULL;
     char     *dst_args = NULL;
-
-    GError   *gerr = NULL;
-    GRegex   *re = g_regex_new(DS_RE, G_REGEX_EXTENDED, 0, &gerr);
-    GMatchInfo *mi = NULL;
-
-    if (gerr != NULL) {
-        rrd_set_error("cannot compile RE: %s", gerr->message);
-        goto done;
-    }
-    int       m = g_regex_match(re, def, 0, &mi);
-    if (!m) {
-        rrd_set_error("invalid DS format");
-        goto done;
-    }
-
-    /*
-       int scnt = g_regex_get_capture_count(re);
-       int i;
-       for (i = 0 ; i < scnt+1 ; i++) {
-       gint s, e;
-       if (! g_match_info_fetch_pos (mi, i, &s, &e)) continue;
-       if (e != s) fprintf(stderr, "%d %.*s %d\n", i, e - s, def + s, e - s);
-       }
-     */
     int       s, e, s2, e2;
 
-    // NAME
+    regex_t re;
+    regmatch_t match[8];
+    int re_valid = 0;
+    int ret;
+
+    ret = regcomp(&re, DS_RE, REG_EXTENDED);
+    if (ret != 0) {
+        char errbuf[256];
+
+        regerror(ret, &re, errbuf, sizeof(errbuf));
+        rrd_set_error("cannot compile regular expression: %s (%s)",
+                      errbuf, DS_RE);
+        goto done;
+    }
+
+    re_valid = 1;
+
+    ret = regexec(&re, def, 8, match, 0);
+    if (ret != 0) {
+        if (ret == REG_NOMATCH) {
+            rrd_set_error("invalid DS format");
+        } else {
+            char errbuf[256];
+
+            regerror(ret, &re, errbuf, sizeof(errbuf));
+            rrd_set_error("regular expression error: %s", errbuf);
+        }
+        goto done;
+    }
+
+
+
+    /* NAME */
     memset(ds_def->ds_nam, 0, sizeof(ds_def->ds_nam));
-    g_match_info_fetch_pos(mi, DS_NAME_SUBGROUP, &s, &e);
+
+    s = match[DS_NAME_SUBGROUP].rm_so;
+    e = match[DS_NAME_SUBGROUP].rm_eo;
+
     strncpy(ds_def->ds_nam, def + s, e - s);
 
-    // DST + DST args
-    g_match_info_fetch_pos(mi, DST_SUBGROUP, &s, &e);
-    g_match_info_fetch_pos(mi, DST_ARGS_SUBGROUP, &s2, &e2);
+    /* DST + DST args */
+    s = match[DST_SUBGROUP].rm_so;
+    e = match[DST_SUBGROUP].rm_eo;
+    s2 = match[DST_ARGS_SUBGROUP].rm_so;
+    e2 = match[DST_ARGS_SUBGROUP].rm_eo;
 
     dst_tmp = strndup(def + s, e - s);
     dst_args = strndup(def + s2, e2 - s2);
@@ -394,34 +480,40 @@ int parseDS(
     }
 
     // mapping, but only if we are interested in it...
-    if (mapping) {
-        char     *endptr;
+        if (mapping) {
+        char *endptr;
 
         mapping->ds_nam = strdup(ds_def->ds_nam);
-        g_match_info_fetch_pos(mi, MAPPED_DS_NAME_SUBGROUP, &s, &e);
-        mapping->mapped_name = strndup(def + s, e - s);
-        if (mapping->ds_nam == NULL || mapping->mapped_name == NULL) {
+
+        s = match[MAPPED_DS_NAME_SUBGROUP].rm_so;
+        e = match[MAPPED_DS_NAME_SUBGROUP].rm_eo;
+
+        if (s >= 0 && e >= s)
+            mapping->mapped_name = strndup(def + s, e - s);
+        else
+            mapping->mapped_name = NULL;
+
+        if (mapping->ds_nam == NULL ||
+            (s >= 0 && mapping->mapped_name == NULL)) {
             rrd_set_error("Cannot allocate memory");
             goto done;
         }
-        g_match_info_fetch_pos(mi, OPT_MAPPED_INDEX_SUBGROUP, &s, &e);
-        /* we do not have to check for errors: invalid indices will be checked later, 
-         * and syntactically, the RE has done the job for us already*/
-        mapping->index = s != e ? strtol(def + s, &endptr, 10) : -1;
 
+        s = match[OPT_MAPPED_INDEX_SUBGROUP].rm_so;
+        e = match[OPT_MAPPED_INDEX_SUBGROUP].rm_eo;
+
+        mapping->index =
+            (s >= 0 && e > s) ? strtol(def + s, &endptr, 10) : -1;
     }
     rc = 0;
 
-  done:
-    if (re) {
-        g_match_info_free(mi);
-        g_regex_unref(re);
-    }
-
-    if (dst_tmp)
-        free(dst_tmp);
-    if (dst_args)
-        free(dst_args);
+    done:
+        if (re_valid)
+            regfree(&re);
+        if (dst_tmp)
+            free(dst_tmp);
+        if (dst_args)
+            free(dst_args);
 
     return rc;
 }
@@ -582,7 +674,7 @@ int parseRRA(
             case CF_DEVSEASONAL:
             case CF_SEASONAL:
                 /* specifies the index (1-based) of CF_HWPREDICT array
-                 * associated with this CF_DEVSEASONAL or CF_SEASONAL array. 
+                 * associated with this CF_DEVSEASONAL or CF_SEASONAL array.
                  * */
                 rra_def->par[RRA_dependent_rra_idx].u_cnt = atoi(token) - 1;
                 break;
@@ -675,7 +767,7 @@ int parseRRA(
         case 5:
             /* If we are here, this must be a CF_HWPREDICT RRA.
              * Specifies the index (1-based) of CF_SEASONAL array
-             * associated with this CF_HWPREDICT array. If this argument 
+             * associated with this CF_HWPREDICT array. If this argument
              * is missing, then the CF_SEASONAL, CF_DEVSEASONAL, CF_DEVPREDICT,
              * CF_FAILURES.
              * arrays are created automatically. */
@@ -775,6 +867,13 @@ static void cleanup_source_file(
     rrd_close(file);
 }
 
+static void
+cleanup_source_file_cb(
+    void *data)
+{
+    cleanup_source_file((rrd_file_t *) data);
+}
+
 int rrd_create_r2(
     const char *filename,
     unsigned long pdp_step,
@@ -790,7 +889,7 @@ int rrd_create_r2(
     unsigned long hashed_name;
     int       rc = -1;
     struct stat stat_buf;
-    GList    *sources_rrd_files = NULL;
+    struct rrd_hl_list *sources_rrd_files = NULL;
     mapping_t *mappings = NULL;
     int       mappings_cnt = 0;
     const char *require_version = NULL;
@@ -978,7 +1077,7 @@ int rrd_create_r2(
         goto done;
     }
 
-    /* set last update time from template if not set explicitly and there 
+    /* set last update time from template if not set explicitly and there
      * are no sources given */
     if (!last_up_set && template_latest_last_up > 0 && sources == NULL) {
         rrd.live_head->last_up = template_latest_last_up;
@@ -1008,12 +1107,17 @@ int rrd_create_r2(
                 rrd_set_error("Cannot open source RRD %s", *s);
                 goto done;
             }
-            sources_rrd_files = g_list_append(sources_rrd_files, sf);
-            if (sources_rrd_files == NULL) {
-                rrd_set_error
-                    ("Cannot keep information about just opened source RRD - likely leaking resources!");
+            struct rrd_hl_list *tmp;
+
+            tmp = rrd_hl_list_append(sources_rrd_files, sf);
+            if (tmp == NULL) {
+                cleanup_source_file(sf);
+                rrd_set_error(
+                    "Cannot keep information about just opened source RRD");
                 goto done;
             }
+
+            sources_rrd_files = tmp;
 
             sources_latest_last_up =
                 max(sources_latest_last_up, sf->rrd->live_head->last_up);
@@ -1030,7 +1134,7 @@ int rrd_create_r2(
     rc = write_rrd(filename, &rrd);
 
   done:
-    g_list_free_full(sources_rrd_files, (GDestroyNotify) cleanup_source_file);
+   rrd_hl_list_free_full(sources_rrd_files,cleanup_source_file_cb);
 
     if (mappings) {
         int       ii;
@@ -1054,7 +1158,7 @@ static void parseGENERIC_DS(
     /*
        int temp;
 
-       temp = sscanf(def,"%lu:%18[^:]:%18[^:]", 
+       temp = sscanf(def,"%lu:%18[^:]:%18[^:]",
        &(rrd -> ds_def[ds_idx].par[DS_mrhb_cnt].u_cnt),
        minstr,maxstr);
      */
@@ -1243,7 +1347,7 @@ static void reset_pdp_prep(
 
     for (ds_index = 0; ds_index < rrd->stat_head->ds_cnt; ds_index++) {
         strcpy(rrd->pdp_prep[ds_index].last_ds, "U");
-        /* interestingly, "U" was associated sometimes with a value of 0.0 
+        /* interestingly, "U" was associated sometimes with a value of 0.0
          * and sometimes with a value of DNAN traditionally during create.
          * I do not know why. Ask Tobi. :-)
          * I choose DNAN here, because it makes more sense, IMHO.
@@ -1394,7 +1498,7 @@ int write_rrd(
 
         fh = fdopen(tmpfd, "wb");
         if (fh == NULL) {
-            // some error 
+            // some error
             rrd_set_error("Cannot open output file");
             goto done;
         }
@@ -1416,7 +1520,7 @@ int write_rrd(
                figure. */
             if (stat(outfilename, &stat_buf) != 0) {
 #ifdef _WIN32
-                stat_buf.st_mode = _S_IREAD | _S_IWRITE;    // have to test it is 
+                stat_buf.st_mode = _S_IREAD | _S_IWRITE;    // have to test it is
 #else
                 /* an error occurred (file not found, maybe?). Anyway:
                    set the mode to 0644 using current umask */
@@ -1475,7 +1579,7 @@ int write_rrd(
     }
   done:
     if (tmpfilename != NULL) {
-        /* remove temp. file by name - and ignore errors, because it might have 
+        /* remove temp. file by name - and ignore errors, because it might have
          * been successfully renamed. And if somebody else used the same temp.
          * file name - well that is bad luck, I guess.. */
         unlink(tmpfilename);
@@ -1624,8 +1728,8 @@ static coverage_t *add_coverage(
         return NULL;
 
     /*
-     * Never extend beyond the ends of current coverage information. We do 
-     * this by forcibly trimming the newly added interval to the start of 
+     * Never extend beyond the ends of current coverage information. We do
+     * this by forcibly trimming the newly added interval to the start of
      * the first and the end of the last interval.
      */
     if (start < current_coverage->start) {
@@ -1661,9 +1765,9 @@ static coverage_t *add_coverage(
             }
             /* NOT covered by the interval, but new interval is fully contained within the current one */
 
-            /* special case: is the newly covered interval EXACTLY the same as the current? 
+            /* special case: is the newly covered interval EXACTLY the same as the current?
              * If yes: just turn the current interval into a covered one.
-             * Also make sure to only report a newly covered interval if it wasn't covered before 
+             * Also make sure to only report a newly covered interval if it wasn't covered before
              * (NOTE: this is actually redundant, as we reach this point only for "uncovered" intervals).
              * Any required collapsing of intervals will be done during the cleanup pass.
              */
@@ -1731,17 +1835,17 @@ static coverage_t *add_coverage(
             break;
         }
 
-        /* 
+        /*
          * Case (B);
-         * 
+         *
          * does the new interval fully cover the current interval?
          * This might happen more than once!
-         * 
+         *
          * Note that if this case happens, case (A) above will NEVER happen...
          */
         if (is_interval_within_interval(org_start, org_end, start, end)) {
             if (!cc->covered) {
-                /* just turn the current interval into a covered one. Report 
+                /* just turn the current interval into a covered one. Report
                  * the range as newly covered */
                 cc->covered = 1;
                 *newly_covered_interval += cc->end - cc->start + 1;
@@ -1749,18 +1853,18 @@ static coverage_t *add_coverage(
         }
 
         /*
-         * Case (C): The newly added interval starts within the current one, but 
+         * Case (C): The newly added interval starts within the current one, but
          * it does not end within.
-         * 
+         *
          * We handle this by handling the implications for the current interval and then
-         * adjusting the new interval start period for the next iteration. That way, we will 
-         * finally hit cases (A) or (B) and we will never see a situation where the 
-         * new interval ends within the current on but does not start within 
+         * adjusting the new interval start period for the next iteration. That way, we will
+         * finally hit cases (A) or (B) and we will never see a situation where the
+         * new interval ends within the current on but does not start within
          * (which would have become case (D)).
          */
 
         if (is_time_within_interval(start, org_start, org_end)) {
-            /* If the current interval is a covered one, we do nothing but 
+            /* If the current interval is a covered one, we do nothing but
              * to adjust the start interval for the next iteration.
              */
             if (cc->covered) {
@@ -1771,7 +1875,7 @@ static coverage_t *add_coverage(
             /* if the current interval is not covered... */
 
             if (cc->start == start) {
-                /* ... and the new interval starts with the current one, we just turn it into a 
+                /* ... and the new interval starts with the current one, we just turn it into a
                  * covered one and adjust the start... */
                 cc->covered = 1;
                 start = org_end + 1;
@@ -1856,7 +1960,7 @@ static rrd_value_t prefill_consolidate(
     case CF_LAST:
         if (isnan(current_estimate))
             return added_value;
-        /* FIXME: There are better ways to do this, but it requires more information 
+        /* FIXME: There are better ways to do this, but it requires more information
          * from the caller.
          */
         return added_value;
@@ -1916,14 +2020,14 @@ static int order_candidates(
 
 
     if (acf != bcf) {
-        /* different RRA CF functions: AVERAGE CF takes precedence, this is 
+        /* different RRA CF functions: AVERAGE CF takes precedence, this is
          * more correct mathematically.
          */
         if (acf == /*targetcf */ CF_AVERAGE)
             return -1;
         if (bcf == /*targetcf */ CF_AVERAGE)
             return 1;
-        // problem: this should not really be possible 
+        // problem: this should not really be possible
         return 0;
     }
 
@@ -2069,9 +2173,9 @@ static void prefill_bin(
 }
 
 
-/* 
- * prefill last value for the target RRA if we haven't done so yet (That is, 
- * if the last value is still unknown). We can only *really* do this, if the 
+/*
+ * prefill last value for the target RRA if we haven't done so yet (That is,
+ * if the last value is still unknown). We can only *really* do this, if the
  * last update of the target RRD is compatible with one of the source RRDs,
  * because there is generally no way to deduce the input data from an RRA bin.
  */
@@ -2094,7 +2198,7 @@ static void prefill_pdp_prep(
     time_t    current_pdp_end_time =
         current_pdp_begin_time + rrd->stat_head->pdp_step - 1;
 
-    /* walk all source RRAs to find a matching last update value. 
+    /* walk all source RRAs to find a matching last update value.
      * We use the candidate RRA list for this, to make sure that we
      * won't erroneously use an RRD we have no candidate for... */
 
@@ -2103,7 +2207,7 @@ static void prefill_pdp_prep(
     for (int c = 0; c < candidate_cnt; c++) {
         const candidate_t *candidate = candidates + c;
 
-        /* only look at each source RRD once. We use the fact that all 
+        /* only look at each source RRD once. We use the fact that all
          * candidates are block-sorted by the source RRDs */
         if (srrd == candidate->rrd)
             continue;
@@ -2132,14 +2236,14 @@ static void prefill_pdp_prep(
                        srrd->pdp_prep + candidate->extra.l,
                        sizeof(pdp_prep_t));
 
-                /* in case the step sizes of target and source do not match, 
+                /* in case the step sizes of target and source do not match,
                  * we take an additional look at the unknown seconds, because that
                  * value should not be larger than the step size.
-                 * 
+                 *
                  * We also assume, that it is unusual to explicitly add unknown data to an
                  * RRD, so we use the current value in any case, and assume the unknown data to
                  * be at the beginning of the current pdp_prep time range.
-                 * 
+                 *
                  * I really hope that I got the semantics right here - PSt.
                  */
 
@@ -2156,7 +2260,7 @@ static void prefill_pdp_prep(
                         max(0, max_target_known - source_known);
                 }
 
-                /* we now have set a known last DS value in the pdp_prep, break 
+                /* we now have set a known last DS value in the pdp_prep, break
                  * out of the loop, because we are done */
                 break;
             }
@@ -2191,8 +2295,8 @@ static void prefill_cdp_prep(
 
     const rrd_t *srrd = NULL;
 
-    /* the list of candidates only contains RRAs with the same PDP count, we 
-     * still have to check if the step times are the same and if we 
+    /* the list of candidates only contains RRAs with the same PDP count, we
+     * still have to check if the step times are the same and if we
      * have the time covered by the CDPs...*/
     for (int c = 0; c < candidate_cnt; c++) {
         const candidate_t *candidate = candidates + c;
@@ -2224,7 +2328,7 @@ static void prefill_cdp_prep(
     }
 
     /* we are still here: we have not found a compatible CDP, use the "CDP RRA"... */
-    /* void init_cdp(const rrd_t *rrd, const rra_def_t *rra_def, 
+    /* void init_cdp(const rrd_t *rrd, const rra_def_t *rra_def,
      *               const pdp_prep_t *pdp_prep, cdp_prep_t *cdp_prep) */
 
     // must find first value index first....
@@ -2247,7 +2351,7 @@ static void prefill_cdp_prep(
     rra_def_t *cdp_rra = rrd->rra_def + cdp_rra_index;
 
     if (target->rra->pdp_cnt == 1) {
-        /* special case: for pdp_cnt == 1 RRAs, we may just use the last average 
+        /* special case: for pdp_cnt == 1 RRAs, we may just use the last average
          * value for the CDP primary value */
         target->cdp[target->extra.l].scratch[CDP_unkn_pdp_cnt].u_cnt = 0;
         target->cdp[target->extra.l].scratch[CDP_primary_val].u_val = 0;
@@ -2335,13 +2439,13 @@ static int find_mapping(
     return -1;
 }
 
-/* Find a set of RRAs among all RRA in the sources list, as matched by the select_func and 
+/* Find a set of RRAs among all RRA in the sources list, as matched by the select_func and
  * ordered (by source) according to order_func.
  */
 
 static candidate_t *find_matching_candidates(
     const candidate_t *target,
-    const GList *sources,
+    const struct rrd_hl_list *sources,
     int *candidate_cnt,
     mapping_t *mappings,
     int mappings_cnt,
@@ -2353,7 +2457,7 @@ static candidate_t *find_matching_candidates(
 
     ds_def_t *ds_def = target->rrd->ds_def + target->extra.l;
 
-    const GList *src;
+    const struct rrd_hl_list *src;
     candidate_t *candidates = NULL;
 
     int       mindex = find_mapping(ds_def->ds_nam, mappings, mappings_cnt);
@@ -2361,7 +2465,9 @@ static candidate_t *find_matching_candidates(
 
     int       cnt = 0, srcindex;
 
-    for (src = sources, srcindex = 1; src; src = g_list_next(src), srcindex++) {
+    for (src = sources, srcindex = 1;
+     src;
+     src = src->next, srcindex++) {
         // first: check source index if we have a mapping containing an index...
         // NOTE: the index is 1-based....
         if (mapping && mapping->index >= 0 && srcindex != mapping->index) {
@@ -2385,7 +2491,6 @@ static candidate_t *find_matching_candidates(
             // match found
 
             candidate_extra_t extra = {.l = source_ds_index };
-            // candidates = g_list_append(candidates, (gpointer) src);
             int       candidate_cnt_for_source = 0;
             candidate_t *candidates_for_source =
                 find_candidate_rras(src_rrd, target->rra,
@@ -2426,13 +2531,13 @@ static candidate_t *find_matching_candidates(
     return candidates;
 }
 
-/* For CDP pre-filling we want to have an AVERAGE RRA with a resolution of 1 
+/* For CDP pre-filling we want to have an AVERAGE RRA with a resolution of 1
  * PDP with a minimum length of the largest pdp count of all other RRAs...
- * 
- * If we do not already have something compatible, we add a temporary RRA that 
+ *
+ * If we do not already have something compatible, we add a temporary RRA that
  * can/should be removed again after CDP prefilling
- * 
- * Returns the index of a suitable RRA in the target RRD. If that RRA was 
+ *
+ * Returns the index of a suitable RRA in the target RRD. If that RRA was
  * added just for this purpose, the *added flag will be true and false otherwise.
  */
 
@@ -2532,7 +2637,7 @@ static void remove_temporary_rra_for_cdp_prefilling(
     if (added_index < 0 || rrd == NULL)
         return;
 
-    /* if we have added a temporary RRA for CDP preparation, we now have to 
+    /* if we have added a temporary RRA for CDP preparation, we now have to
      * shorten the various data elements again... */
 
     unsigned long rra_index = 0;
@@ -2574,7 +2679,7 @@ static int cdp_match(
 
 static int rrd_prefill_data(
     rrd_t *rrd,
-    const GList *sources,
+    const struct rrd_hl_list *sources,
     mapping_t *mappings,
     int mappings_cnt)
 {
@@ -2603,7 +2708,7 @@ static int rrd_prefill_data(
         /*
          * Re-use candidate_t as a container for all information, because the data structure contains
          * everything we need further on.
-         * 
+         *
          */
 
         candidate_t target = {
@@ -2618,7 +2723,7 @@ static int rrd_prefill_data(
 
         for (ds_index = 0; ds_index < rrd->stat_head->ds_cnt; ds_index++) {
             target.extra.l = ds_index;
-            /* for each DS in each RRA within rrd find a list of candidate DS/RRAs from 
+            /* for each DS in each RRA within rrd find a list of candidate DS/RRAs from
              * the sources list that match by name... */
 
 
@@ -2651,7 +2756,7 @@ static int rrd_prefill_data(
                 continue;
             }
 
-            /* walk all RRA bins and fill the current DS with data from 
+            /* walk all RRA bins and fill the current DS with data from
              * the list of candidates */
 
             unsigned long cnt = 0;
@@ -2667,7 +2772,7 @@ static int rrd_prefill_data(
         total_rows += rra_def->row_cnt;
     }
 
-    /* now we walk all RRAs and DSs again to handle CDP prefilling. Do this AFTER 
+    /* now we walk all RRAs and DSs again to handle CDP prefilling. Do this AFTER
      * taking care of RRA data, because we might have added the average-1-pdp RRA
      * to obtain input data for CDP consolidation. And THAT RRA will only be available
      * AFTER all bin prefilling done in the previous pass */
@@ -2704,10 +2809,10 @@ static int rrd_prefill_data(
     }
 
     rc = 0;
-    /* within each source file, order the RRAs by resolution - if we have an 
+    /* within each source file, order the RRAs by resolution - if we have an
      * exact resolution match, use that one as the first in the (sub)list. */
 
-    /* for each bin in each RRA select the best bin from among the candidate 
+    /* for each bin in each RRA select the best bin from among the candidate
      * RRA data sets */
   done:
     if (rra_added_temporarily) {
@@ -2756,7 +2861,7 @@ time_t end_time_for_row(
        length timeslot, ending at exact multiples of timeslot
        wrt. the unix epoch. So the current timeslot ends at:
 
-       int(last_up / timeslot) * timeslot 
+       int(last_up / timeslot) * timeslot
 
        or (equivalently):
        t

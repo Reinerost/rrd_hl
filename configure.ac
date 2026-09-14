@@ -611,18 +611,6 @@ AM_CONDITIONAL(BUILD_RRDGRAPH,[test $enable_rrd_graph != no])
 
 AM_CONDITIONAL(BUILD_RRDRESTORE,[test $enable_rrd_restore != no])
 
-EX_CHECK_ALL(glib-2.0,   glib_check_version,            glib.h,                 glib-2.0,    2.28.7, ftp://ftp.gtk.org/pub/glib/2.28/, "")
-
-AC_CACHE_CHECK([whether we need to include gthreads for g_thread_init],
-    [ac_cv_glibc_g_thread_init],
-    [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <glib.h>]],
-                    [[#if !GLIB_CHECK_VERSION(2, 32, 0)
-                     # error "glib needs g_thread_init"
-                     #endif]])],
-                     [AC_MSG_RESULT(no)],
-                     [EX_CHECK_ALL(gthread-2.0, g_thread_init, glib.h, gthread-2.0, x.x.x, "", "")
-                     AC_MSG_RESULT(yes)])])
-
 CORE_LIBS="$LIBS"
 
 if test $enable_rrd_graph != no; then

@@ -24,7 +24,7 @@
 
 #include "unused.h"
 
-#include <glib.h>
+#include <regex.h>
 
 /* for basename */
 #ifdef HAVE_LIBGEN_H
@@ -56,7 +56,83 @@
 
 /* some constant definitions */
 
+struct rrd_hl_map *
+rrd_hl_map_new(void)
+{
+    return calloc(1, sizeof(struct rrd_hl_map));
+}
 
+void
+rrd_hl_map_free(struct rrd_hl_map *map)
+{
+    struct rrd_hl_map_entry *entry;
+    struct rrd_hl_map_entry *next;
+
+    if (map == NULL)
+        return;
+
+    for (entry = map->head; entry != NULL; entry = next) {
+        next = entry->next;
+        free(entry->key);
+        free(entry);
+    }
+
+    free(map);
+}
+
+int
+rrd_hl_map_get(
+    const struct rrd_hl_map *map,
+    const char *key,
+    long *value)
+{
+    const struct rrd_hl_map_entry *entry;
+
+    if (map == NULL)
+        return 0;
+
+    for (entry = map->head; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->key, key) == 0) {
+            if (value != NULL)
+                *value = entry->value;
+
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int
+rrd_hl_map_put(
+    struct rrd_hl_map *map,
+    char *key,
+    long value)
+{
+    struct rrd_hl_map_entry *entry;
+
+    if (map == NULL || key == NULL)
+        return -1;
+
+    for (entry = map->head; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->key, key) == 0) {
+            free(key);
+            entry->value = value;
+            return 0;
+        }
+    }
+
+    entry = malloc(sizeof(*entry));
+    if (entry == NULL)
+        return -1;
+
+    entry->key = key;
+    entry->value = value;
+    entry->next = map->head;
+    map->head = entry;
+
+    return 0;
+}
 
 #ifndef RRD_DEFAULT_FONT
 /* there is special code later to pick Cour.ttf when running on windows */
@@ -423,11 +499,11 @@ int im_free(
         free(im->daemon_addr);
 
     if (im->gdef_map) {
-        g_hash_table_destroy(im->gdef_map);
+        rrd_hl_map_free(im->gdef_map);
     }
 
     if (im->rrd_map) {
-        g_hash_table_destroy(im->rrd_map);
+        rrd_hl_map_free(im->rrd_map);
     }
 
 
@@ -961,13 +1037,13 @@ int data_fetch(
             continue;
 
         /* do we have it already ? */
-        gpointer  value;
+        long      value;
         char     *key = gdes_fetch_key(im->gdes[i]);
-        gboolean  ok =
-            g_hash_table_lookup_extended(im->rrd_map, key, NULL, &value);
+        int       ok = rrd_hl_map_get(im->rrd_map, key, &value);
+
         free(key);
         if (ok) {
-            ii = GPOINTER_TO_INT(value);
+            ii = (int) value;
             im->gdes[i].start = im->gdes[ii].start;
             im->gdes[i].end = im->gdes[ii].end;
             im->gdes[i].step = im->gdes[ii].step;
@@ -1072,8 +1148,7 @@ int data_fetch(
             return -1;
         }
         // remember that we already got this one
-        g_hash_table_insert(im->rrd_map, gdes_fetch_key(im->gdes[i]),
-                            GINT_TO_POINTER(i));
+        rrd_hl_map_put(im->rrd_map, gdes_fetch_key(im->gdes[i]), i);
     }
     return 0;
 }
@@ -4903,10 +4978,9 @@ void rrd_graph_init(
 #ifdef HAVE_TZSET
     tzset();
 #endif
-    im->gdef_map =
-        g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    im->gdef_map = rrd_hl_map_new();
     //use of g_free() cause heap damage on windows. Key is allocated by malloc() in sprintf_alloc(), so free() must use
-    im->rrd_map = g_hash_table_new_full(g_str_hash, g_str_equal, free, NULL);
+    im->rrd_map = rrd_hl_map_new();
     im->graph_type = GTYPE_TIME;
     im->base = 1000;
     im->daemon_addr = NULL;
@@ -5826,28 +5900,32 @@ static int bad_format_check(
     const char *pattern,
     char *fmt)
 {
-    GError   *gerr = NULL;
-    GRegex   *re = g_regex_new(pattern, G_REGEX_EXTENDED, 0, &gerr);
-    GMatchInfo *mi;
+    regex_t re;
+    int rc;
 
-    if (gerr != NULL) {
+    rc = regcomp(&re, pattern, REG_EXTENDED);
+    if (rc != 0) {
+        char error[256];
+
+        regerror(rc, &re, error, sizeof(error));
         rrd_set_error("cannot compile regular expression: %s (%s)",
-                      gerr->message, pattern);
+                      error, pattern);
         return 1;
     }
-    int       m = g_regex_match(re, fmt, 0, &mi);
 
-    g_match_info_free(mi);
-    g_regex_unref(re);
-    if (!m) {
+    rc = regexec(&re, fmt, 0, NULL, 0);
+    regfree(&re);
+
+    if (rc != 0) {
         rrd_set_error("invalid format string '%s' (should match '%s')", fmt,
                       pattern);
         return 1;
     }
+
     return 0;
 }
 
-#define SAFE_STRING "(?:[^%]+|%%)*"
+#define SAFE_STRING "([^%]+|%%)*"
 
 int bad_format_imginfo(
     char *fmt)
@@ -5856,7 +5934,7 @@ int bad_format_imginfo(
                             "%lu" SAFE_STRING "$", fmt);
 }
 
-#define FLOAT_STRING "%[-+ 0#]?[0-9]*(?:[.][0-9]+)?l[eEfFgG]"
+#define FLOAT_STRING "%[-+ 0#]?[0-9]*([.][0-9]+)?l[eEfFgG]"
 
 int bad_format_axis(
     char *fmt)
@@ -5869,7 +5947,7 @@ int bad_format_print(
     char *fmt)
 {
     return bad_format_check("^" SAFE_STRING FLOAT_STRING SAFE_STRING
-                            "(?:%[sS])?" SAFE_STRING "$", fmt);
+                        "(%[sS])?" SAFE_STRING "$", fmt);
 }
 
 int vdef_parse(

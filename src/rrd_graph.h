@@ -26,9 +26,6 @@
 #include "rrd_tool.h"
 #include "rrd_rpncalc.h"
 
-#include <glib.h>
-
-
 #define ALTYGRID  	 0x01   /* use alternative y grid algorithm */
 #define ALTAUTOSCALE	 0x02   /* use alternative algorithm to find lower and upper bounds */
 #define ALTAUTOSCALE_MIN 0x04   /* use alternative algorithm to find lower bounds */
@@ -48,6 +45,25 @@
 #define FORCE_UTC_TIME 0x1000   /* Work in UTC timezone instead of localtimg */
 
 #define gdes_fetch_key(x)  sprintf_alloc("%s:%s:%d:%d:%d:%d:%d:%d",x.rrd,x.daemon,x.cf,x.cf_reduce,x.start_orig,x.end_orig,x.step_orig,x.step)
+
+struct rrd_hl_map_entry {
+    char *key;
+    long value;
+    struct rrd_hl_map_entry *next;
+};
+
+struct rrd_hl_map {
+    struct rrd_hl_map_entry *head;
+};
+
+struct rrd_hl_map *rrd_hl_map_new(void);
+void rrd_hl_map_free(struct rrd_hl_map *map);
+int rrd_hl_map_get(const struct rrd_hl_map *map,
+                   const char *key,
+                   long *value);
+int rrd_hl_map_put(struct rrd_hl_map *map,
+                   char *key,
+                   long value);
 
 enum tmt_en { TMT_SECOND = 0, TMT_MINUTE, TMT_HOUR, TMT_DAY,
     TMT_WEEK, TMT_MONTH, TMT_YEAR
@@ -354,8 +370,8 @@ typedef struct image_desc_t {
     PangoLayout *layout; /* the pango layout we use for writing fonts */
     rrd_info_t *grinfo; /* root pointer to extra graph info */
     rrd_info_t *grinfo_current; /* pointing to current entry */
-    GHashTable* gdef_map;  /* a map of all *def gdef entries for quick access */
-    GHashTable* rrd_map;  /* a map of all rrd files in use for gdef entries */
+    struct rrd_hl_map *gdef_map;
+    struct rrd_hl_map *rrd_map;
     enum image_init_en init_mode; /* do we need Cairo/Pango? */
     double x_pixie; /* scale for X (see xtr() for reference) */
     double y_pixie; /* scale for Y (see ytr() for reference) */
