@@ -84,8 +84,10 @@ rrd_hl_map_put(
     }
 
     entry = malloc(sizeof(*entry));
-    if (entry == NULL)
+    if (entry == NULL) {
+        free(key);
         return -1;
+    }
 
     entry->key = key;
     entry->value = value;
