@@ -129,10 +129,6 @@ if BUILD_RRDCGI
 bin_PROGRAMS += rrdcgi
 endif
 
-if BUILD_RRDCACHED
-
-endif
-
 rrdcgi_SOURCES	= rrd_cgi.c
 rrdcgi_LDADD	= librrd.la librrdupd.la
 

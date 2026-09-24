@@ -99,9 +99,6 @@ AC_ARG_ENABLE(docs,AS_HELP_STRING([--disable-docs],[disable building documentati
 AC_ARG_ENABLE(examples,AS_HELP_STRING([--disable-examples],[disable building of examples]),
 [],[enable_examples=yes])
 
-AC_ARG_ENABLE(rrdcached,AS_HELP_STRING([--disable-rrdcached],[disable building of rrdcached]),
-[],[enable_rrdcached=yes])
-
 AC_ARG_ENABLE(rrdcgi,AS_HELP_STRING([--disable-rrdcgi],[disable building of rrdcgi]),
 [],[enable_rrdcgi=yes])
 
@@ -114,7 +111,6 @@ AC_ARG_ENABLE(rrd_restore,AS_HELP_STRING([--disable-rrd_restore],[disable rrd_re
 AM_CONDITIONAL(BUILD_DOCS,[test $enable_docs != no])
 AM_CONDITIONAL(BUILD_EXAMPLES,[test $enable_examples != no])
 AM_CONDITIONAL(BUILD_RRDCGI,[test $enable_rrdcgi != no])
-AM_CONDITIONAL(BUILD_RRDCACHED,[test $enable_rrdcached != no])
 
 
 if test $enable_rrd_graph != no; then
@@ -917,18 +913,6 @@ esac
 # Pass the conditional to automake
 AM_CONDITIONAL([MINGW_W64], [test "$build_mingw_w64" = "yes"])
 
-# systemd check
-PKG_PROG_PKG_CONFIG
-AC_ARG_WITH([systemdsystemunitdir],
-	AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [Directory for systemd service files]),
-	[], [with_systemdsystemunitdir=$($PKG_CONFIG --variable=systemdsystemunitdir systemd)])
-if test "x$with_systemdsystemunitdir" != xno; then
-        AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])
-        AC_CONFIG_FILES([etc/rrdcached.socket etc/rrdcached.service])
-fi
-AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$with_systemdsystemunitdir" -a "x$with_systemdsystemunitdir" != xno ])
-
-
 CONFIGURE_PART(Apply Configuration Information)
 
 AC_CONFIG_FILES([examples/shared-demo.pl])
@@ -994,28 +978,21 @@ if test "$lua_need_compat51" = "1"; then
 echo "   Lua Lua-modules dir: $LUA_INSTALL_LMOD"
 fi
 fi
-echo "      Systemd unit dir: $with_systemdsystemunitdir"
 echo "    Build Tcl Bindings: $enable_tcl"
 echo " Build Python Bindings: $enable_python"
 echo "         Python Binary: $PYTHON"
 echo "        Python Version: $PYTHON_VERSION"
 echo "        Build examples: $enable_examples"
-echo "       Build rrdcached: $enable_rrdcached"
 echo "          Build rrdcgi: $enable_rrdcgi"
 echo "       Build librrd MT: $enable_pthread"
 echo "           With libDBI: $have_libdbi"
 echo "         With librados: $have_librados"
 echo "          With libwrap: $have_libwrap"
-echo "      With systemd dir: $with_systemdsystemunitdir"
 echo
 echo "             Libraries: $ALL_LIBS"
 echo
 echo "Type 'make' to compile the software and use 'make install' to "
 echo "install everything to: $prefix."
-if test "x$with_systemdsystemunitdir" != xno; then
-echo
-echo "Type 'make etc-install' to install systemd support for rrdcached"
-fi
 echo
 echo "       ... that wishlist is NO JOKE. If you find RRDtool useful"
 echo "make me happy. Go to https://tobi.oetiker.ch/wish and"

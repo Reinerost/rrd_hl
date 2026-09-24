@@ -54,7 +54,9 @@ CONFIGURE_ARGS += \
 	--disable-perl \
 	--disable-python \
 	--disable-ruby \
-	--disable-tcl
+	--disable-tcl \
+	--disable-docs \
+	--disable-examples
 
 
 define Package/librrd_hl/install
